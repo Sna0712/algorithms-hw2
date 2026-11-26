@@ -19,8 +19,12 @@
 
 | 파일 | 하는 일 |
 | --- | --- |
-| `SPEC.md` | 명세 틀. 에이전트가 초안을 쓰고 **본인이 고칩니다** |
-| `src/` · `tests/` · `experiments/` | 비어 있습니다. 수업에서 채웁니다 |
+| `SPEC.md` | 기능, API, 예외, 실험 결과에 대한 프로젝트 명세 |
+| `PLAN.md` | TDD 구현 순서 및 파일별 설계 계획 |
+| `src/` | Base62, separate chaining/linear probing 해시 테이블, URL 단축기, 웹 서버 |
+| `tests/` | `unittest` 기반 알고리즘, 실험, 단축기 및 서버 테스트 |
+| `experiments/` | 재현 가능한 충돌 실험과 생성된 CSV/SVG 결과 |
+| `.github/copilot-instructions.md` | 구현, 테스트 및 Git 협업 규칙 |
 | `tools/catchup.sh` | 수업 중 놓친 단계를 따라잡는 스크립트 |
 | `Makefile` | `make test` · `make serve` · `make experiment` |
 
@@ -35,10 +39,13 @@
 | --- | --- |
 | 테스트 | `make test` |
 | 웹 서버 (포트 8000) | `make serve` |
-| 충돌 실험 | `make experiment` |
+| 충돌 비교 실험 및 separate chaining 0.25–4 적재율 실험 | `make experiment` |
 | 놓친 단계 따라잡기 | `sh tools/catchup.sh <단계 번호>` |
 
 외부 라이브러리는 쓰지 않습니다. Python 표준 모듈만으로 충분합니다.
+
+웹 서버의 `/table` 경로에서는 각 버킷과 슬롯 상태, Horner 해시 계산식,
+separate chaining 체인 및 linear probing 탐색 경로를 확인할 수 있습니다.
 
 ## 로컬에서 하기
 

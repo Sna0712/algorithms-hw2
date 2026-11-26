@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10172a">
+  <title>Hashlink — URL shortener lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #10172a;
+      color: #eef2ff;
+      font-synthesis: none;
+      --panel: #182238;
+      --panel-light: #202e49;
+      --muted: #9eacc7;
+      --line: #34425e;
+      --cyan: #66e3d2;
+      --blue: #8db4ff;
+      --red: #ff9a9a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(ellipse at 82% 0%, #24375a 0, transparent 38rem),
+        #10172a;
+    }
+
+    main { width: min(1120px, calc(100% - 36px)); margin: 0 auto; padding: 48px 0 64px; }
+    header { margin-bottom: 30px; }
+    .eyebrow { color: var(--cyan); font-size: .75rem; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 9px 0 8px; font-size: clamp(2rem, 5vw, 3.2rem); letter-spacing: -.045em; }
+    header p { max-width: 660px; margin: 0; color: var(--muted); line-height: 1.65; }
+    .layout { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 18px; align-items: start; }
+    .panel { padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--panel) 94%, transparent); box-shadow: 0 18px 48px #05091455; }
+    h2 { margin: 0 0 8px; font-size: 1.12rem; }
+    .description { min-height: 44px; margin: 0 0 18px; color: var(--muted); font-size: .9rem; line-height: 1.55; }
+    label { display: block; margin: 0 0 7px; color: #d3ddf2; font-size: .82rem; font-weight: 650; }
+    .field-row { display: flex; gap: 9px; }
+    input, select {
+      width: 100%;
+      min-width: 0;
+      padding: 12px 13px;
+      border: 1px solid #405170;
+      border-radius: 10px;
+      outline: none;
+      background: #111a2d;
+      color: #f5f7ff;
+      font: inherit;
+      font-size: .9rem;
+    }
+    input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px #66e3d222; }
+    button {
+      flex: 0 0 auto;
+      padding: 11px 15px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--cyan);
+      color: #102126;
+      cursor: pointer;
+      font: inherit;
+      font-size: .86rem;
+      font-weight: 750;
+    }
+    button:hover { filter: brightness(1.07); }
+    button:disabled { cursor: wait; opacity: .65; }
+    .result, .error, .notice { margin-top: 15px; padding: 12px 13px; border-radius: 10px; font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .result { border: 1px solid #367f79; background: #153b3a; color: #dffdfa; }
+    .result a { display: inline-block; margin-top: 4px; color: var(--cyan); font-weight: 700; }
+    .error { border: 1px solid #804c5a; background: #422533; color: #ffd9df; }
+    .notice { border: 1px solid #455678; background: #1d2b45; color: #c9d6ef; }
+    .notice code, code { color: #a9c5ff; }
+    .demo { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line); }
+    .demo p { margin: 0 0 9px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
+    .demo button { padding: 8px 11px; background: #2b3c5a; color: #e7efff; }
+    .trace-summary { margin: 17px 0 10px; color: #d6e0f5; font-size: .88rem; line-height: 1.5; }
+    .table-wrap { max-height: 255px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: .78rem; text-align: left; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid #2b3851; white-space: nowrap; }
+    th { position: sticky; top: 0; background: #202e49; color: #c5d2ec; font-weight: 700; }
+    td { color: #e3eaf8; }
+    .chain { display: grid; gap: 7px; margin-top: 10px; }
+    .chain-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px; background: #111a2d; font-size: .78rem; }
+    .chain-item.match { border-color: #3a8a78; background: #15352f; }
+    .chain-item.not-compared { opacity: .55; }
+    .chain-key { overflow-wrap: anywhere; color: #d9e3f6; }
+    .chain-result { color: var(--muted); text-align: right; }
+    .footnote { margin: 15px 0 0; color: var(--muted); font-size: .76rem; line-height: 1.55; }
+    [hidden] { display: none !important; }
+
+    @media (max-width: 780px) {
+      main { padding-top: 30px; }
+      .layout { grid-template-columns: 1fr; }
+      .description { min-height: auto; }
+      .panel { padding: 19px; }
+    }
+    @media (max-width: 480px) {
+      .field-row { flex-direction: column; }
+      .field-row button { min-height: 42px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Algorithms · Hash table lab</div>
+      <h1>Make a shorter link.<br>See the hash at work.</h1>
+      <p>Shorten a URL, then inspect Horner hashing and compare separate chaining with linear probing. Links are kept in memory while this server is running.</p>
+    </header>
+
+    <div class="layout">
+      <section class="panel" aria-labelledby="shorten-title">
+        <h2 id="shorten-title">Shorten a URL</h2>
+        <p class="description">Submit an absolute HTTP or HTTPS address. Submitting the same address again returns its existing short code.</p>
+        <form id="shorten-form">
+          <label for="url-input">Destination URL</label>
+          <div class="field-row">
+            <input id="url-input" name="url" type="url" placeholder="https://example.com/article" required>
+            <button id="shorten-button" type="submit">Shorten URL</button>
+          </div>
+        </form>
+        <div id="shorten-result" class="result" aria-live="polite" hidden></div>
+        <div id="shorten-error" class="error" role="alert" hidden></div>
+
+        <div class="demo">
+          <h2>Try a collision</h2>
+          <p>On a fresh server, add two URLs ending in <code>/a</code> and <code>/i</code>. With the initial 8 buckets, their hashes land in the same bucket.</p>
+          <button id="demo-button" type="button">Add collision examples</button>
+          <p id="demo-status" aria-live="polite"></p>
+          <p>Then inspect the second URL in the panel. If the table has already grown, use the visualizer on URLs shown in the same bucket.</p>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="visualize-title">
+        <h2 id="visualize-title">Explore the hash table</h2>
+        <p><a href="/table">View all bucket and slot states</a></p>
+        <p class="description">Choose a collision strategy to trace Horner hashing, the bucket or initial slot, and each chain comparison or probed slot.</p>
+        <form id="visualize-form">
+          <label for="collision-resolution">Collision resolution</label>
+          <select id="collision-resolution" name="collision-resolution">
+            <option value="separate_chaining">Separate chaining</option>
+            <option value="linear_probing">Linear probing</option>
+          </select>
+          <label for="key-input">URL key</label>
+          <div class="field-row">
+            <input id="key-input" name="key" type="url" placeholder="https://example.com/i" required>
+            <button id="visualize-button" type="submit">Visualize</button>
+          </div>
+        </form>
+        <div id="visualize-error" class="error" role="alert" hidden></div>
+        <div id="trace-output" hidden>
+          <p id="trace-summary" class="trace-summary" aria-live="polite"></p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Step</th>
+                  <th scope="col">Character</th>
+                  <th scope="col">Code point</th>
+                  <th scope="col">Previous h</th>
+                  <th scope="col">New h</th>
+                </tr>
+              </thead>
+              <tbody id="hash-steps"></tbody>
+            </table>
+          </div>
+          <h3 id="chain-heading">Separate-chaining bucket</h3>
+          <div id="chain-output" class="chain"></div>
+          <div id="probe-output" class="chain" hidden>
+            <p id="probe-summary" class="trace-summary"></p>
+            <div id="probe-slots" class="chain"></div>
+          </div>
+        </div>
+        <p class="footnote">For each character: <code>h = (h × 31 + code point) mod capacity</code>. Separate chaining counts key comparisons; linear probing counts inspected slots, including the empty slot that ends a failed search.</p>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const shortenForm = document.querySelector("#shorten-form");
+    const shortenButton = document.querySelector("#shorten-button");
+    const shortenResult = document.querySelector("#shorten-result");
+    const shortenError = document.querySelector("#shorten-error");
+    const visualizeForm = document.querySelector("#visualize-form");
+    const visualizeButton = document.querySelector("#visualize-button");
+    const visualizeError = document.querySelector("#visualize-error");
+    const traceOutput = document.querySelector("#trace-output");
+    const collisionResolution = document.querySelector("#collision-resolution");
+    const chainHeading = document.querySelector("#chain-heading");
+    const chainOutput = document.querySelector("#chain-output");
+    const probeOutput = document.querySelector("#probe-output");
+    const probeSummary = document.querySelector("#probe-summary");
+    const probeSlots = document.querySelector("#probe-slots");
+    const demoButton = document.querySelector("#demo-button");
+    const demoStatus = document.querySelector("#demo-status");
+    const collisionExamples = [
+      "https://example.com/a",
+      "https://example.com/i"
+    ];
+
+    async function postJson(path, payload) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body.error || `Request failed (${response.status})`);
+      }
+      return body;
+    }
+
+    shortenForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      shortenError.hidden = true;
+      shortenResult.hidden = true;
+      shortenButton.disabled = true;
+      try {
+        const body = await postJson("/shorten", {
+          url: document.querySelector("#url-input").value
+        });
+        shortenResult.replaceChildren();
+        const label = document.createElement("div");
+        label.textContent = "Short URL";
+        const link = document.createElement("a");
+        link.href = body.short_url;
+        link.textContent = body.short_url;
+        shortenResult.append(label, link);
+        shortenResult.hidden = false;
+      } catch (error) {
+        shortenError.textContent = error.message;
+        shortenError.hidden = false;
+      } finally {
+        shortenButton.disabled = false;
+      }
+    });
+
+    function renderTrace(trace) {
+      const stepsBody = document.querySelector("#hash-steps");
+      stepsBody.replaceChildren();
+      trace.steps.forEach((step, index) => {
+        const row = document.createElement("tr");
+        const values = [
+          String(index + 1),
+          JSON.stringify(step.character),
+          `U+${step.codepoint.toString(16).toUpperCase().padStart(4, "0")} (${step.codepoint})`,
+          String(step.previous_hash),
+          String(step.current_hash)
+        ];
+        values.forEach((value) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.append(cell);
+        });
+        stepsBody.append(row);
+      });
+
+      chainOutput.replaceChildren();
+      probeSlots.replaceChildren();
+      const summary = document.querySelector("#trace-summary");
+      if (trace.collision_resolution === "separate_chaining") {
+        summary.textContent =
+          `Bucket ${trace.bucket_index} · ${trace.chain_length} entr${trace.chain_length === 1 ? "y" : "ies"} in chain · ` +
+          `${trace.comparisons} key comparison${trace.comparisons === 1 ? "" : "s"} · ` +
+          (trace.found ? `found code ${trace.value}` : "key is not stored");
+        chainHeading.textContent = "Separate-chaining bucket";
+        chainOutput.hidden = false;
+        probeOutput.hidden = true;
+        if (trace.chain.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "notice";
+          empty.textContent = "This bucket is empty; an unsuccessful lookup makes zero key comparisons.";
+          chainOutput.append(empty);
+        }
+        trace.chain.forEach((entry) => {
+          const item = document.createElement("div");
+          item.className = "chain-item";
+          if (entry.matches) item.classList.add("match");
+          if (!entry.compared) item.classList.add("not-compared");
+
+          const key = document.createElement("span");
+          key.className = "chain-key";
+          key.textContent = entry.key;
+          const result = document.createElement("span");
+          result.className = "chain-result";
+          result.textContent = entry.compared
+            ? `Compare ${entry.comparison_number}: ${entry.matches ? "match" : "no match"}`
+            : "not visited";
+          item.append(key, result);
+          chainOutput.append(item);
+        });
+      } else {
+        summary.textContent =
+          `Initial bucket ${trace.initial_bucket} · ${trace.slot_probes} slot checks · ` +
+          `final slot ${trace.final_slot} · ` +
+          (trace.found ? `found code ${trace.value}` : "key is not stored");
+        chainHeading.textContent = "Linear-probing slot sequence";
+        chainOutput.hidden = true;
+        probeOutput.hidden = false;
+        probeSummary.textContent =
+          `Initial bucket: ${trace.initial_bucket} · Final location: slot ${trace.final_slot} · ` +
+          `Slots inspected: ${trace.slot_probes}`;
+        trace.probes.forEach((entry, index) => {
+          const item = document.createElement("div");
+          item.className = "chain-item";
+          if (entry.matches) item.classList.add("match");
+
+          const key = document.createElement("span");
+          key.className = "chain-key";
+          key.textContent = entry.occupied
+            ? `Slot ${entry.slot_index}: ${entry.key}`
+            : `Slot ${entry.slot_index}: empty`;
+          const result = document.createElement("span");
+          result.className = "chain-result";
+          if (entry.matches) {
+            result.textContent = `Match; final location (${index + 1} checks)`;
+          } else if (!entry.occupied) {
+            result.textContent = `Empty slot ends search (${index + 1} checks)`;
+          } else {
+            result.textContent = `Collision; continue to slot ${entry.next_slot}`;
+          }
+          item.append(key, result);
+          probeSlots.append(item);
+        });
+      }
+      traceOutput.hidden = false;
+    }
+
+    async function visualize(key, method = collisionResolution.value) {
+      visualizeError.hidden = true;
+      const trace = await postJson("/visualize", {
+        key,
+        collision_resolution: method
+      });
+      renderTrace(trace);
+    }
+
+    visualizeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      visualizeError.hidden = true;
+      visualizeButton.disabled = true;
+      try {
+        await visualize(
+          document.querySelector("#key-input").value,
+          collisionResolution.value
+        );
+      } catch (error) {
+        visualizeError.textContent = error.message;
+        visualizeError.hidden = false;
+      } finally {
+        visualizeButton.disabled = false;
+      }
+    });
+
+    demoButton.addEventListener("click", async () => {
+      demoButton.disabled = true;
+      demoStatus.textContent = "Adding the example URLs…";
+      try {
+        for (const url of collisionExamples) {
+          await postJson("/shorten", { url });
+        }
+        document.querySelector("#key-input").value = collisionExamples[1];
+        await visualize(collisionExamples[1], collisionResolution.value);
+        demoStatus.textContent = "Examples added. The selected collision strategy is shown above.";
+      } catch (error) {
+        demoStatus.textContent = error.message;
+      } finally {
+        demoButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
