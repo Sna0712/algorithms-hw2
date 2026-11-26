@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 from src.base62 import encode_base62
 from src.hash_table import HashTable, LookupTrace
+from src.linear_probing import LinearProbingHashTable, ProbeTrace
 
 
 def validate_url(url: str) -> str:
@@ -27,10 +28,24 @@ def validate_url(url: str) -> str:
 class URLShortener:
     """Shorten URLs to Base62 codes and expand codes back to their URLs."""
 
-    def __init__(self) -> None:
-        self._url_to_code = HashTable()
-        self._code_to_url = HashTable()
+    def __init__(self, collision_resolution: str = "separate_chaining") -> None:
+        if collision_resolution not in ("separate_chaining", "linear_probing"):
+            raise ValueError("unknown collision resolution method")
+
+        table_type = (
+            HashTable
+            if collision_resolution == "separate_chaining"
+            else LinearProbingHashTable
+        )
+        self._collision_resolution = collision_resolution
+        self._url_to_code = table_type()
+        self._code_to_url = table_type()
         self._next_id = 1
+
+    @property
+    def collision_resolution(self) -> str:
+        """Return the collision strategy used by the URL and code indexes."""
+        return self._collision_resolution
 
     def shorten(self, url: str) -> str:
         """Return a stable Base62 code for a valid URL."""
@@ -58,6 +73,10 @@ class URLShortener:
             raise KeyError(code)
         return url
 
-    def inspect_url_lookup(self, url: str) -> LookupTrace:
-        """Return the hash and bucket lookup trace for a valid URL."""
+    def inspect_url_lookup(self, url: str) -> LookupTrace | ProbeTrace:
+        """Return the hash and collision-resolution trace for a valid URL."""
         return self._url_to_code.inspect_lookup(validate_url(url))
+
+    def url_entries(self) -> list[tuple[str, object]]:
+        """Return a snapshot of stored URL-to-code mappings."""
+        return self._url_to_code.items()

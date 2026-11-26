@@ -26,3 +26,11 @@
 
 - Check the final diff for unrelated changes and formatting issues.
 - Summarize changed files and validation results. Do not commit or push unless explicitly requested.
+
+## Feature branches, issues, and integration
+
+- Implement project work on a feature branch; do not make feature changes directly on the default branch. Prefer `feature/<issue-number>-<short-name>` when an issue exists.
+- Associate each feature branch and pull request with the relevant issue. Confirm the issue's acceptance criteria against `SPEC.md` before implementation; do not create duplicate issues.
+- Keep commits small, coherent, and descriptive. Include the relevant issue reference when one exists, and commit only after the focused tests and required project checks pass.
+- Do not push or merge directly to the default branch. Open a pull request and merge only after required review and checks pass.
+- Do not create commits, push branches, open or merge pull requests unless the user explicitly requests that GitHub operation.

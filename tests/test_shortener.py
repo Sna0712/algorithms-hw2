@@ -1,5 +1,7 @@
 import unittest
 
+from src.hash_table import HashTable
+from src.linear_probing import LinearProbingHashTable
 from src.shortener import URLShortener
 
 
@@ -51,6 +53,32 @@ class URLShortenerTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             shortener.expand("not-registered")
+
+    def test_shortener_round_trip_and_duplicates_with_both_table_types(self):
+        url = "https://example.com/uses-linear-or-chaining"
+        for resolution in ("separate_chaining", "linear_probing"):
+            with self.subTest(resolution=resolution):
+                shortener = URLShortener(collision_resolution=resolution)
+                expected_table_type = (
+                    HashTable
+                    if resolution == "separate_chaining"
+                    else LinearProbingHashTable
+                )
+
+                code, created = shortener.shorten_with_status(url)
+                duplicate_code, duplicate_created = shortener.shorten_with_status(url)
+
+                self.assertEqual(shortener.collision_resolution, resolution)
+                self.assertIsInstance(shortener._url_to_code, expected_table_type)
+                self.assertIsInstance(shortener._code_to_url, expected_table_type)
+                self.assertTrue(created)
+                self.assertFalse(duplicate_created)
+                self.assertEqual(duplicate_code, code)
+                self.assertEqual(shortener.expand(code), url)
+
+    def test_unknown_collision_resolution_is_rejected(self):
+        with self.assertRaises(ValueError):
+            URLShortener(collision_resolution="unknown")
 
 
 if __name__ == "__main__":

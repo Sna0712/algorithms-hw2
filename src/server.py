@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from html import escape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -11,6 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.linear_probing import LinearProbingHashTable
+from src.hash_table import HashTable
 from src.shortener import URLShortener
 
 
@@ -25,7 +27,11 @@ def create_server(
 ) -> ThreadingHTTPServer:
     """Create an HTTP server, optionally using an existing shortener instance."""
     service = shortener if shortener is not None else URLShortener()
+    chaining_table = HashTable()
     linear_table = LinearProbingHashTable()
+    for url, code in service.url_entries():
+        chaining_table.put(url, code)
+        linear_table.put(url, code)
 
     class ShortenerRequestHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -34,6 +40,14 @@ def create_server(
                 self._send_bytes(
                     200,
                     _TEMPLATE_PATH.read_bytes(),
+                    "text/html; charset=utf-8",
+                )
+                return
+
+            if path == "/table":
+                self._send_bytes(
+                    200,
+                    self._render_table_page(),
                     "text/html; charset=utf-8",
                 )
                 return
@@ -82,6 +96,7 @@ def create_server(
             except ValueError as error:
                 self._send_error(400, str(error))
                 return
+            chaining_table.put(url, code)
             linear_table.put(url, code)
 
             response_body = json.dumps(
@@ -115,10 +130,10 @@ def create_server(
                 return
 
             try:
+                service.inspect_url_lookup(key)
                 if collision_resolution == "separate_chaining":
-                    trace = service.inspect_url_lookup(key)
+                    trace = chaining_table.inspect_lookup(key)
                 else:
-                    service.inspect_url_lookup(key)
                     probe_trace = linear_table.inspect_lookup(key)
             except ValueError as error:
                 self._send_error(400, str(error))
@@ -260,6 +275,71 @@ def create_server(
                 body,
                 "application/json; charset=utf-8",
             )
+
+        def _render_table_page(self) -> bytes:
+            parts = [
+                "<!doctype html>",
+                '<html lang="en"><head><meta charset="utf-8">',
+                '<meta name="viewport" content="width=device-width, initial-scale=1">',
+                "<title>Hash table storage</title>",
+                "<style>",
+                "body{font:16px system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#172033}",
+                "table{border-collapse:collapse;width:100%;margin:1rem 0 2rem}",
+                "th,td{border:1px solid #ccd3df;padding:.55rem;text-align:left;vertical-align:top}",
+                "th{background:#edf1f7;width:9rem}",
+                "code{overflow-wrap:anywhere}.empty{color:#697386}",
+                "</style></head><body>",
+                '<p><a href="/">Back to URL shortener</a></p>',
+                "<h1>Hash table storage</h1>",
+                "<p>Horner hashing starts with h = 0 and processes each character from left to right.",
+                " For each character, calculate h = (h * 31 + ord(character)) % capacity;",
+                " the final value is the home bucket or initial slot.</p>",
+                "<h2>Separate chaining buckets</h2>",
+                "<p>Each bucket contains its stored key/value chain.</p>",
+                "<table><thead><tr><th>Bucket</th><th>Stored state</th></tr></thead><tbody>",
+            ]
+            for bucket_index in range(chaining_table.capacity):
+                entries = chaining_table.bucket_items(bucket_index)
+                if entries:
+                    state = " &rarr; ".join(
+                        f'<code>{escape(key, quote=True)}</code> '
+                        f'&rarr; <code>{escape(str(value), quote=True)}</code>'
+                        for key, value in entries
+                    )
+                else:
+                    state = '<span class="empty">empty</span>'
+                parts.append(
+                    f"<tr><th>Bucket {bucket_index}</th><td>{state}</td></tr>"
+                )
+            parts.extend(
+                (
+                    "</tbody></table>",
+                    "<h2>Linear probing slots</h2>",
+                    "<p>Each occupied slot shows the key's Horner home bucket and the",
+                    " sequence of occupied/empty slots visited to find it.</p>",
+                    "<table><thead><tr><th>Slot</th><th>Stored state and probe route</th></tr></thead><tbody>",
+                )
+            )
+            for slot_index, entry in enumerate(linear_table.slot_items()):
+                if entry is None:
+                    state = '<span class="empty">empty</span>'
+                else:
+                    key, value = entry
+                    home = linear_table.hash_index(key)
+                    route = linear_table.inspect_lookup(key)
+                    route_text = " &rarr; ".join(
+                        f"slot {probe.slot_index}" for probe in route.probes
+                    )
+                    state = (
+                        f'<code>{escape(key, quote=True)}</code> '
+                        f'&rarr; <code>{escape(str(value), quote=True)}</code>'
+                        f"<br>Horner home: {home}; probe route: {route_text}"
+                    )
+                parts.append(
+                    f"<tr><th>Slot {slot_index}</th><td>{state}</td></tr>"
+                )
+            parts.extend(("</tbody></table>", "</body></html>"))
+            return "\n".join(parts).encode("utf-8")
 
         def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
