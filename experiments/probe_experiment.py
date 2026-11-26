@@ -12,6 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.hash_table import HashTable
+from src.linear_probing import LinearProbingHashTable
 
 
 DEFAULT_CAPACITY = 128
@@ -54,11 +55,11 @@ def collect_results(
     capacity: int = DEFAULT_CAPACITY,
     target_loads: Sequence[float] = DEFAULT_LOADS,
 ) -> list[ExperimentResult]:
-    """Run reproducible successful and unsuccessful chaining lookups."""
+    """Compare reproducible successful and unsuccessful lookups in both tables."""
     if isinstance(capacity, bool) or not isinstance(capacity, int):
         raise TypeError("capacity must be an integer")
-    if capacity <= 0:
-        raise ValueError("capacity must be positive")
+    if capacity < 2:
+        raise ValueError("capacity must be at least 2 for linear probing")
     if not target_loads:
         raise ValueError("target_loads must not be empty")
 
@@ -68,7 +69,7 @@ def collect_results(
             raise TypeError("load factors must be numbers")
         if not 0 < target_load < 1:
             raise ValueError("target load factors must be between 0 and 1")
-        key_counts.append(max(1, round(target_load * capacity)))
+        key_counts.append(min(max(1, round(target_load * capacity)), capacity - 1))
 
     max_key_count = max(key_counts)
     stored_key_samples = _make_key_samples(
@@ -80,56 +81,81 @@ def collect_results(
 
     results = []
     for key_count in key_counts:
-        table = HashTable(initial_capacity=capacity, max_load=None)
         stored_keys = stored_key_samples[:key_count]
         missing_keys = missing_key_samples[:key_count]
-
-        for index, key in enumerate(stored_keys):
-            table.put(key, index)
-
-        successful_comparisons = 0
-        for key in stored_keys:
-            value, comparisons = table.get_with_comparisons(key)
-            if value is None:
-                raise RuntimeError(f"inserted key was not found: {key}")
-            successful_comparisons += comparisons
-
-        unsuccessful_comparisons = 0
-        for key in missing_keys:
-            value, comparisons = table.get_with_comparisons(key)
-            if value is not None:
-                raise RuntimeError(f"missing key unexpectedly found: {key}")
-            unsuccessful_comparisons += comparisons
-
         actual_load = key_count / capacity
-        successful_theory = 1 + (key_count - 1) / (2 * capacity)
-        unsuccessful_theory = actual_load
-        results.extend(
-            (
-                ExperimentResult(
-                    collision_resolution="separate_chaining",
-                    capacity=capacity,
-                    key_count=key_count,
-                    load_factor=actual_load,
-                    search_type="successful",
-                    search_count=len(stored_keys),
-                    measurement_unit="key_comparisons",
-                    measured_average=successful_comparisons / len(stored_keys),
-                    theoretical_average=successful_theory,
-                ),
-                ExperimentResult(
-                    collision_resolution="separate_chaining",
-                    capacity=capacity,
-                    key_count=key_count,
-                    load_factor=actual_load,
-                    search_type="unsuccessful",
-                    search_count=len(missing_keys),
-                    measurement_unit="key_comparisons",
-                    measured_average=unsuccessful_comparisons / len(missing_keys),
-                    theoretical_average=unsuccessful_theory,
-                ),
+        for resolution in ("separate_chaining", "linear_probing"):
+            if resolution == "separate_chaining":
+                table: HashTable | LinearProbingHashTable = HashTable(
+                    initial_capacity=capacity,
+                    max_load=None,
+                )
+                measurement_unit = "key_comparisons"
+            else:
+                table = LinearProbingHashTable(
+                    initial_capacity=capacity,
+                    max_load=None,
+                )
+                measurement_unit = "slot_probes"
+
+            for index, key in enumerate(stored_keys):
+                table.put(key, index)
+
+            successful_total = 0
+            for key in stored_keys:
+                if isinstance(table, HashTable):
+                    value, cost = table.get_with_comparisons(key)
+                else:
+                    value, cost = table.get_with_probes(key)
+                if value is None:
+                    raise RuntimeError(f"inserted key was not found: {key}")
+                successful_total += cost
+
+            unsuccessful_total = 0
+            for key in missing_keys:
+                if isinstance(table, HashTable):
+                    value, cost = table.get_with_comparisons(key)
+                else:
+                    value, cost = table.get_with_probes(key)
+                if value is not None:
+                    raise RuntimeError(f"missing key unexpectedly found: {key}")
+                unsuccessful_total += cost
+
+            if resolution == "separate_chaining":
+                successful_theory = 1 + (key_count - 1) / (2 * capacity)
+                unsuccessful_theory = actual_load
+            else:
+                successful_theory = 0.5 * (1 + 1 / (1 - actual_load))
+                unsuccessful_theory = 0.5 * (
+                    1 + 1 / (1 - actual_load) ** 2
+                )
+
+            results.extend(
+                (
+                    ExperimentResult(
+                        collision_resolution=resolution,
+                        capacity=capacity,
+                        key_count=key_count,
+                        load_factor=actual_load,
+                        search_type="successful",
+                        search_count=len(stored_keys),
+                        measurement_unit=measurement_unit,
+                        measured_average=successful_total / len(stored_keys),
+                        theoretical_average=successful_theory,
+                    ),
+                    ExperimentResult(
+                        collision_resolution=resolution,
+                        capacity=capacity,
+                        key_count=key_count,
+                        load_factor=actual_load,
+                        search_type="unsuccessful",
+                        search_count=len(missing_keys),
+                        measurement_unit=measurement_unit,
+                        measured_average=unsuccessful_total / len(missing_keys),
+                        theoretical_average=unsuccessful_theory,
+                    ),
+                )
             )
-        )
 
     return results
 
@@ -158,7 +184,7 @@ def write_csv(results: Sequence[ExperimentResult], path: str | Path) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
+        writer = csv.writer(csv_file, lineterminator="\n")
         writer.writerow(CSV_COLUMNS)
         for result in results:
             writer.writerow(
@@ -177,152 +203,175 @@ def write_csv(results: Sequence[ExperimentResult], path: str | Path) -> None:
 
 
 def write_svg(results: Sequence[ExperimentResult], path: str | Path) -> None:
-    """Write a standard-library SVG chart for measured and theoretical costs."""
+    """Write separate, unit-labeled charts for both probing strategies."""
     if not results:
         raise ValueError("results must not be empty")
 
-    width = 900
-    height = 560
-    left = 90
-    right = 40
-    top = 45
-    bottom = 90
-    plot_width = width - left - right
-    plot_height = height - top - bottom
-    max_value = max(
-        result.measured_average for result in results
-    )
-    max_value = max(
-        max_value,
-        max(result.theoretical_average for result in results),
-        1.0,
-    ) * 1.15
-
-    def x_position(load_factor: float) -> float:
-        return left + load_factor * plot_width
-
-    def y_position(value: float) -> float:
-        return top + plot_height - (value / max_value) * plot_height
-
+    width = 1100
+    height = 660
+    outer_left = 70
+    outer_right = 35
+    panel_gap = 85
+    panel_width = (width - outer_left - outer_right - panel_gap) / 2
+    top = 100
+    plot_height = 425
+    plot_bottom = top + plot_height
+    tick_count = 5
     elements = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">',
-        "<title>Separate chaining lookup comparison experiment</title>",
+        "<title>Separate chaining and linear probing lookup experiment</title>",
         (
-            "<desc>Measured and theoretical successful and unsuccessful search "
-            "costs, expressed as average key comparisons.</desc>"
+            "<desc>Measured and theoretical lookup costs by load factor. "
+            "Separate chaining counts key comparisons; linear probing counts "
+            "inspected slots. The panels use independent vertical scales.</desc>"
         ),
         '<rect width="100%" height="100%" fill="white"/>',
         (
-            f'<text x="{width / 2:g}" y="25" text-anchor="middle" '
+            f'<text x="{width / 2:g}" y="27" text-anchor="middle" '
             'font-family="sans-serif" font-size="16">'
-            "Separate chaining lookup costs</text>"
+            "Hash-table collision resolution comparison</text>"
         ),
     ]
 
-    tick_count = 5
-    for tick in range(tick_count + 1):
-        load_factor = tick / tick_count
-        x = x_position(load_factor)
-        elements.append(
-            f'<line x1="{x:.2f}" y1="{top}" x2="{x:.2f}" '
-            f'y2="{top + plot_height}" stroke="#e0e0e0"/>'
-        )
-        elements.append(
-            f'<text x="{x:.2f}" y="{top + plot_height + 22}" '
-            'text-anchor="middle" font-family="sans-serif" font-size="12">'
-            f"{load_factor:.1f}</text>"
-        )
-
-    for tick in range(tick_count + 1):
-        value = max_value * tick / tick_count
-        y = y_position(value)
-        elements.append(
-            f'<line x1="{left}" y1="{y:.2f}" x2="{left + plot_width}" '
-            f'y2="{y:.2f}" stroke="#e0e0e0"/>'
-        )
-        elements.append(
-            f'<text x="{left - 12}" y="{y + 4:.2f}" text-anchor="end" '
-            'font-family="sans-serif" font-size="12">'
-            f"{value:.1f}</text>"
-        )
-
-    elements.extend(
-        (
-            f'<line x1="{left}" y1="{top}" x2="{left}" '
-            f'y2="{top + plot_height}" stroke="#333"/>',
-            f'<line x1="{left}" y1="{top + plot_height}" '
-            f'x2="{left + plot_width}" y2="{top + plot_height}" stroke="#333"/>',
-            (
-                f'<text x="{left + plot_width / 2:g}" y="{height - 20}" '
-                'text-anchor="middle" font-family="sans-serif" font-size="14">'
-                "Load factor (alpha)</text>"
-            ),
-            (
-                f'<text x="22" y="{top + plot_height / 2:g}" '
-                f'transform="rotate(-90 22 {top + plot_height / 2:g})" '
-                'text-anchor="middle" font-family="sans-serif" font-size="14">'
-                "Average key comparisons</text>"
-            ),
-        )
+    method_settings = (
+        ("separate_chaining", "Separate chaining", "Average key comparisons"),
+        ("linear_probing", "Linear probing", "Average slot probes"),
     )
-
     series = (
         ("successful", "measured", "#1769aa", ""),
         ("successful", "theoretical", "#1769aa", "7 5"),
         ("unsuccessful", "measured", "#d1495b", ""),
         ("unsuccessful", "theoretical", "#d1495b", "7 5"),
     )
-    for search_type, metric, color, dash_pattern in series:
-        points = []
-        for result in results:
-            if result.search_type != search_type:
-                continue
-            value = (
-                result.measured_average
-                if metric == "measured"
-                else result.theoretical_average
-            )
-            points.append(
-                f"{x_position(result.load_factor):.2f},{y_position(value):.2f}"
-            )
-        dash_attribute = (
-            f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
-        )
-        elements.append(
-            f'<polyline points="{" ".join(points)}" fill="none" '
-            f'stroke="{color}" stroke-width="2.5"{dash_attribute}/>'
-        )
-        for point in points:
-            x, y = point.split(",")
-            elements.append(
-                f'<circle cx="{x}" cy="{y}" r="3.5" fill="{color}"/>'
-            )
-
-    legend_x = left + 10
-    legend_y = top + 18
     legend_items = (
         ("Successful Measured", "#1769aa", ""),
         ("Successful Theoretical", "#1769aa", "7 5"),
         ("Unsuccessful Measured", "#d1495b", ""),
         ("Unsuccessful Theoretical", "#d1495b", "7 5"),
     )
-    for index, (label, color, dash_pattern) in enumerate(legend_items):
-        column = index % 2
-        row = index // 2
-        x1 = legend_x + column * 250
-        y = legend_y + row * 22
-        dash_attribute = (
-            f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
+
+    for panel_index, (method, title, unit_label) in enumerate(method_settings):
+        panel_left = outer_left + panel_index * (panel_width + panel_gap)
+        plot_left = panel_left + 52
+        plot_right = panel_left + panel_width
+        plot_width = plot_right - plot_left
+        method_results = [
+            result for result in results
+            if result.collision_resolution == method
+        ]
+        if not method_results:
+            continue
+        max_value = max(
+            max(result.measured_average, result.theoretical_average)
+            for result in method_results
         )
+        max_value = max(max_value, 1.0) * 1.15
+
+        def x_position(load_factor: float) -> float:
+            return plot_left + load_factor * plot_width
+
+        def y_position(value: float) -> float:
+            return plot_bottom - (value / max_value) * plot_height
+
         elements.append(
-            f'<line x1="{x1}" y1="{y}" x2="{x1 + 28}" y2="{y}" '
-            f'stroke="{color}" stroke-width="2.5"{dash_attribute}/>'
+            f'<text x="{(plot_left + plot_right) / 2:g}" y="58" '
+            'text-anchor="middle" font-family="sans-serif" font-size="15">'
+            f"{escape(title)} - {escape(unit_label)}</text>"
         )
-        elements.append(
-            f'<text x="{x1 + 36}" y="{y + 4}" font-family="sans-serif" '
-            f'font-size="12">{escape(label)}</text>'
+
+        for tick in range(tick_count + 1):
+            load_factor = tick / tick_count
+            x = x_position(load_factor)
+            elements.extend(
+                (
+                    f'<line x1="{x:.2f}" y1="{top}" x2="{x:.2f}" '
+                    f'y2="{plot_bottom}" stroke="#e0e0e0"/>',
+                    f'<text x="{x:.2f}" y="{plot_bottom + 20}" '
+                    'text-anchor="middle" font-family="sans-serif" font-size="11">'
+                    f"{load_factor:.1f}</text>",
+                )
+            )
+
+        for tick in range(tick_count + 1):
+            value = max_value * tick / tick_count
+            y = y_position(value)
+            elements.extend(
+                (
+                    f'<line x1="{plot_left}" y1="{y:.2f}" '
+                    f'x2="{plot_right}" y2="{y:.2f}" stroke="#e0e0e0"/>',
+                    f'<text x="{plot_left - 8}" y="{y + 4:.2f}" '
+                    'text-anchor="end" font-family="sans-serif" font-size="11">'
+                    f"{value:.1f}</text>",
+                )
+            )
+
+        elements.extend(
+            (
+                f'<line x1="{plot_left}" y1="{top}" x2="{plot_left}" '
+                f'y2="{plot_bottom}" stroke="#333"/>',
+                f'<line x1="{plot_left}" y1="{plot_bottom}" '
+                f'x2="{plot_right}" y2="{plot_bottom}" stroke="#333"/>',
+                (
+                    f'<text x="{(plot_left + plot_right) / 2:g}" '
+                    f'y="{plot_bottom + 42}" text-anchor="middle" '
+                    'font-family="sans-serif" font-size="13">'
+                    "Load factor (alpha)</text>"
+                ),
+                (
+                    f'<text x="{panel_left + 15}" y="{top + plot_height / 2:g}" '
+                    f'transform="rotate(-90 {panel_left + 15} '
+                    f'{top + plot_height / 2:g})" text-anchor="middle" '
+                    'font-family="sans-serif" font-size="12">'
+                    f"{escape(unit_label)}</text>"
+                ),
+            )
         )
+
+        for search_type, metric, color, dash_pattern in series:
+            points = []
+            for result in method_results:
+                if result.search_type != search_type:
+                    continue
+                value = (
+                    result.measured_average
+                    if metric == "measured"
+                    else result.theoretical_average
+                )
+                points.append(
+                    f"{x_position(result.load_factor):.2f},"
+                    f"{y_position(value):.2f}"
+                )
+            dash_attribute = (
+                f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
+            )
+            elements.append(
+                f'<polyline points="{" ".join(points)}" fill="none" '
+                f'stroke="{color}" stroke-width="2.5"{dash_attribute}/>'
+            )
+            for point in points:
+                x, y = point.split(",")
+                elements.append(
+                    f'<circle cx="{x}" cy="{y}" r="3.5" fill="{color}"/>'
+                )
+
+        for index, (label, color, dash_pattern) in enumerate(legend_items):
+            column = index % 2
+            row = index // 2
+            x1 = plot_left + 8 + column * (plot_width / 2)
+            y = 610 + row * 20
+            dash_attribute = (
+                f' stroke-dasharray="{dash_pattern}"' if dash_pattern else ""
+            )
+            elements.append(
+                f'<line x1="{x1:.2f}" y1="{y}" x2="{x1 + 22:.2f}" y2="{y}" '
+                f'stroke="{color}" stroke-width="2.5"{dash_attribute}/>'
+            )
+            elements.append(
+                f'<text x="{x1 + 28:.2f}" y="{y + 4}" '
+                'font-family="sans-serif" font-size="10">'
+                f"{escape(label)}</text>"
+            )
 
     elements.append("</svg>")
     output_path = Path(path)

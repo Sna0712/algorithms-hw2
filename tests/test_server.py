@@ -44,6 +44,9 @@ class ServerTests(unittest.TestCase):
         self.assertIn('postJson("/visualize"', page)
         self.assertIn("https://example.com/a", page)
         self.assertIn("https://example.com/i", page)
+        self.assertIn('id="collision-resolution"', page)
+        self.assertIn('value="linear_probing"', page)
+        self.assertIn("slot_probes", page)
 
     def test_shorten_returns_code_and_duplicate_status_with_forwarded_origin(self):
         url = "https://example.com/a"
@@ -143,6 +146,48 @@ class ServerTests(unittest.TestCase):
 
     def test_visualizer_rejects_non_url_key_with_bad_request(self):
         status, body = self._post_json("/visualize", {"key": "not a URL"})
+
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_visualizer_reports_linear_probe_path_and_final_slot(self):
+        first_url = "https://example.com/a"
+        second_url = "https://example.com/i"
+        self._post_json("/shorten", {"url": first_url})
+        _status, second_short = self._post_json(
+            "/shorten",
+            {"url": second_url},
+        )
+
+        status, trace = self._post_json(
+            "/visualize",
+            {
+                "key": second_url,
+                "collision_resolution": "linear_probing",
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(trace["collision_resolution"], "linear_probing")
+        self.assertEqual(trace["initial_bucket"], trace["probes"][0]["slot_index"])
+        self.assertEqual(trace["initial_bucket"], 0)
+        self.assertEqual(trace["probes"][0]["key"], first_url)
+        self.assertEqual(trace["probes"][0]["matches"], False)
+        self.assertEqual(trace["probes"][1]["key"], second_url)
+        self.assertTrue(trace["probes"][1]["matches"])
+        self.assertEqual(trace["final_slot"], trace["probes"][-1]["slot_index"])
+        self.assertEqual(trace["final_slot"], 1)
+        self.assertEqual(trace["slot_probes"], 2)
+        self.assertEqual(trace["value"], second_short["code"])
+
+    def test_visualizer_rejects_unknown_collision_resolution(self):
+        status, body = self._post_json(
+            "/visualize",
+            {
+                "key": "https://example.com/a",
+                "collision_resolution": "unknown",
+            },
+        )
 
         self.assertEqual(status, 400)
         self.assertIn("error", body)

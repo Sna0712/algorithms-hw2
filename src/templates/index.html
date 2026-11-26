@@ -42,7 +42,7 @@
     .description { min-height: 44px; margin: 0 0 18px; color: var(--muted); font-size: .9rem; line-height: 1.55; }
     label { display: block; margin: 0 0 7px; color: #d3ddf2; font-size: .82rem; font-weight: 650; }
     .field-row { display: flex; gap: 9px; }
-    input {
+    input, select {
       width: 100%;
       min-width: 0;
       padding: 12px 13px;
@@ -54,7 +54,7 @@
       font: inherit;
       font-size: .9rem;
     }
-    input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px #66e3d222; }
+    input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px #66e3d222; }
     button {
       flex: 0 0 auto;
       padding: 11px 15px;
@@ -110,7 +110,7 @@
     <header>
       <div class="eyebrow">Algorithms · Hash table lab</div>
       <h1>Make a shorter link.<br>See the hash at work.</h1>
-      <p>Shorten a URL, then inspect Horner hashing and the separate-chaining bucket search behind it. Links are kept in memory while this server is running.</p>
+      <p>Shorten a URL, then inspect Horner hashing and compare separate chaining with linear probing. Links are kept in memory while this server is running.</p>
     </header>
 
     <div class="layout">
@@ -138,8 +138,13 @@
 
       <section class="panel" aria-labelledby="visualize-title">
         <h2 id="visualize-title">Explore the hash table</h2>
-        <p class="description">Enter a URL key to follow every Horner step, find its bucket, and see each key comparison in that bucket's chain.</p>
+        <p class="description">Choose a collision strategy to trace Horner hashing, the bucket or initial slot, and each chain comparison or probed slot.</p>
         <form id="visualize-form">
+          <label for="collision-resolution">Collision resolution</label>
+          <select id="collision-resolution" name="collision-resolution">
+            <option value="separate_chaining">Separate chaining</option>
+            <option value="linear_probing">Linear probing</option>
+          </select>
           <label for="key-input">URL key</label>
           <div class="field-row">
             <input id="key-input" name="key" type="url" placeholder="https://example.com/i" required>
@@ -163,10 +168,14 @@
               <tbody id="hash-steps"></tbody>
             </table>
           </div>
-          <h3>Separate-chaining bucket</h3>
+          <h3 id="chain-heading">Separate-chaining bucket</h3>
           <div id="chain-output" class="chain"></div>
+          <div id="probe-output" class="chain" hidden>
+            <p id="probe-summary" class="trace-summary"></p>
+            <div id="probe-slots" class="chain"></div>
+          </div>
         </div>
-        <p class="footnote">For each character: <code>h = (h × 31 + code point) mod capacity</code>. A comparison checks one stored key; an unsuccessful lookup checks the full chain.</p>
+        <p class="footnote">For each character: <code>h = (h × 31 + code point) mod capacity</code>. Separate chaining counts key comparisons; linear probing counts inspected slots, including the empty slot that ends a failed search.</p>
       </section>
     </div>
   </main>
@@ -180,6 +189,12 @@
     const visualizeButton = document.querySelector("#visualize-button");
     const visualizeError = document.querySelector("#visualize-error");
     const traceOutput = document.querySelector("#trace-output");
+    const collisionResolution = document.querySelector("#collision-resolution");
+    const chainHeading = document.querySelector("#chain-heading");
+    const chainOutput = document.querySelector("#chain-output");
+    const probeOutput = document.querySelector("#probe-output");
+    const probeSummary = document.querySelector("#probe-summary");
+    const probeSlots = document.querySelector("#probe-slots");
     const demoButton = document.querySelector("#demo-button");
     const demoStatus = document.querySelector("#demo-status");
     const collisionExamples = [
@@ -226,11 +241,6 @@
     });
 
     function renderTrace(trace) {
-      document.querySelector("#trace-summary").textContent =
-        `Bucket ${trace.bucket_index} · ${trace.chain_length} entr${trace.chain_length === 1 ? "y" : "ies"} in chain · ` +
-        `${trace.comparisons} key comparison${trace.comparisons === 1 ? "" : "s"} · ` +
-        (trace.found ? `found code ${trace.value}` : "key is not stored");
-
       const stepsBody = document.querySelector("#hash-steps");
       stepsBody.replaceChildren();
       trace.steps.forEach((step, index) => {
@@ -250,37 +260,83 @@
         stepsBody.append(row);
       });
 
-      const chainOutput = document.querySelector("#chain-output");
       chainOutput.replaceChildren();
-      if (trace.chain.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "notice";
-        empty.textContent = "This bucket is empty; an unsuccessful lookup makes zero key comparisons.";
-        chainOutput.append(empty);
-      }
-      trace.chain.forEach((entry) => {
-        const item = document.createElement("div");
-        item.className = "chain-item";
-        if (entry.matches) item.classList.add("match");
-        if (!entry.compared) item.classList.add("not-compared");
+      probeSlots.replaceChildren();
+      const summary = document.querySelector("#trace-summary");
+      if (trace.collision_resolution === "separate_chaining") {
+        summary.textContent =
+          `Bucket ${trace.bucket_index} · ${trace.chain_length} entr${trace.chain_length === 1 ? "y" : "ies"} in chain · ` +
+          `${trace.comparisons} key comparison${trace.comparisons === 1 ? "" : "s"} · ` +
+          (trace.found ? `found code ${trace.value}` : "key is not stored");
+        chainHeading.textContent = "Separate-chaining bucket";
+        chainOutput.hidden = false;
+        probeOutput.hidden = true;
+        if (trace.chain.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "notice";
+          empty.textContent = "This bucket is empty; an unsuccessful lookup makes zero key comparisons.";
+          chainOutput.append(empty);
+        }
+        trace.chain.forEach((entry) => {
+          const item = document.createElement("div");
+          item.className = "chain-item";
+          if (entry.matches) item.classList.add("match");
+          if (!entry.compared) item.classList.add("not-compared");
 
-        const key = document.createElement("span");
-        key.className = "chain-key";
-        key.textContent = entry.key;
-        const result = document.createElement("span");
-        result.className = "chain-result";
-        result.textContent = entry.compared
-          ? `Compare ${entry.comparison_number}: ${entry.matches ? "match" : "no match"}`
-          : "not visited";
-        item.append(key, result);
-        chainOutput.append(item);
-      });
+          const key = document.createElement("span");
+          key.className = "chain-key";
+          key.textContent = entry.key;
+          const result = document.createElement("span");
+          result.className = "chain-result";
+          result.textContent = entry.compared
+            ? `Compare ${entry.comparison_number}: ${entry.matches ? "match" : "no match"}`
+            : "not visited";
+          item.append(key, result);
+          chainOutput.append(item);
+        });
+      } else {
+        summary.textContent =
+          `Initial bucket ${trace.initial_bucket} · ${trace.slot_probes} slot checks · ` +
+          `final slot ${trace.final_slot} · ` +
+          (trace.found ? `found code ${trace.value}` : "key is not stored");
+        chainHeading.textContent = "Linear-probing slot sequence";
+        chainOutput.hidden = true;
+        probeOutput.hidden = false;
+        probeSummary.textContent =
+          `Initial bucket: ${trace.initial_bucket} · Final location: slot ${trace.final_slot} · ` +
+          `Slots inspected: ${trace.slot_probes}`;
+        trace.probes.forEach((entry, index) => {
+          const item = document.createElement("div");
+          item.className = "chain-item";
+          if (entry.matches) item.classList.add("match");
+
+          const key = document.createElement("span");
+          key.className = "chain-key";
+          key.textContent = entry.occupied
+            ? `Slot ${entry.slot_index}: ${entry.key}`
+            : `Slot ${entry.slot_index}: empty`;
+          const result = document.createElement("span");
+          result.className = "chain-result";
+          if (entry.matches) {
+            result.textContent = `Match; final location (${index + 1} checks)`;
+          } else if (!entry.occupied) {
+            result.textContent = `Empty slot ends search (${index + 1} checks)`;
+          } else {
+            result.textContent = `Collision; continue to slot ${entry.next_slot}`;
+          }
+          item.append(key, result);
+          probeSlots.append(item);
+        });
+      }
       traceOutput.hidden = false;
     }
 
-    async function visualize(key) {
+    async function visualize(key, method = collisionResolution.value) {
       visualizeError.hidden = true;
-      const trace = await postJson("/visualize", { key });
+      const trace = await postJson("/visualize", {
+        key,
+        collision_resolution: method
+      });
       renderTrace(trace);
     }
 
@@ -289,7 +345,10 @@
       visualizeError.hidden = true;
       visualizeButton.disabled = true;
       try {
-        await visualize(document.querySelector("#key-input").value);
+        await visualize(
+          document.querySelector("#key-input").value,
+          collisionResolution.value
+        );
       } catch (error) {
         visualizeError.textContent = error.message;
         visualizeError.hidden = false;
@@ -306,8 +365,8 @@
           await postJson("/shorten", { url });
         }
         document.querySelector("#key-input").value = collisionExamples[1];
-        await visualize(collisionExamples[1]);
-        demoStatus.textContent = "Examples added. The chain above shows both colliding URLs.";
+        await visualize(collisionExamples[1], collisionResolution.value);
+        demoStatus.textContent = "Examples added. The selected collision strategy is shown above.";
       } catch (error) {
         demoStatus.textContent = error.message;
       } finally {

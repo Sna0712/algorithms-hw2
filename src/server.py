@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlsplit
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.linear_probing import LinearProbingHashTable
 from src.shortener import URLShortener
 
 
@@ -24,6 +25,7 @@ def create_server(
 ) -> ThreadingHTTPServer:
     """Create an HTTP server, optionally using an existing shortener instance."""
     service = shortener if shortener is not None else URLShortener()
+    linear_table = LinearProbingHashTable()
 
     class ShortenerRequestHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -80,6 +82,7 @@ def create_server(
             except ValueError as error:
                 self._send_error(400, str(error))
                 return
+            linear_table.put(url, code)
 
             response_body = json.dumps(
                 {
@@ -100,45 +103,97 @@ def create_server(
                 self._send_error(400, "The 'key' field must be a string")
                 return
 
+            collision_resolution = payload.get(
+                "collision_resolution",
+                "separate_chaining",
+            )
+            if collision_resolution not in (
+                "separate_chaining",
+                "linear_probing",
+            ):
+                self._send_error(400, "Unknown collision resolution method")
+                return
+
             try:
-                trace = service.inspect_url_lookup(key)
+                if collision_resolution == "separate_chaining":
+                    trace = service.inspect_url_lookup(key)
+                else:
+                    service.inspect_url_lookup(key)
+                    probe_trace = linear_table.inspect_lookup(key)
             except ValueError as error:
                 self._send_error(400, str(error))
                 return
 
-            chain = []
-            for index, (stored_key, value) in enumerate(trace.bucket_entries):
-                compared = index < trace.comparisons
-                matches = compared and stored_key == key
-                chain.append(
-                    {
-                        "key": stored_key,
-                        "value": value,
-                        "compared": compared,
-                        "comparison_number": index + 1 if compared else None,
-                        "matches": matches,
-                    }
-                )
+            if collision_resolution == "separate_chaining":
+                chain = []
+                for index, (stored_key, value) in enumerate(trace.bucket_entries):
+                    compared = index < trace.comparisons
+                    matches = compared and stored_key == key
+                    chain.append(
+                        {
+                            "key": stored_key,
+                            "value": value,
+                            "compared": compared,
+                            "comparison_number": index + 1 if compared else None,
+                            "matches": matches,
+                        }
+                    )
 
-            response_body = {
-                "key": key,
-                "steps": [
+                response_body = {
+                    "key": key,
+                    "collision_resolution": collision_resolution,
+                    "steps": [
+                        {
+                            "character": step.character,
+                            "codepoint": step.codepoint,
+                            "previous_hash": step.previous_hash,
+                            "current_hash": step.current_hash,
+                        }
+                        for step in trace.steps
+                    ],
+                    "bucket_index": trace.bucket_index,
+                    "chain": chain,
+                    "chain_length": len(trace.bucket_entries),
+                    "collision": len(trace.bucket_entries) > 1,
+                    "found": trace.found,
+                    "value": trace.value,
+                    "comparisons": trace.comparisons,
+                }
+            else:
+                probe_entries = [
                     {
-                        "character": step.character,
-                        "codepoint": step.codepoint,
-                        "previous_hash": step.previous_hash,
-                        "current_hash": step.current_hash,
+                        "slot_index": entry.slot_index,
+                        "key": entry.key,
+                        "value": entry.value,
+                        "occupied": entry.occupied,
+                        "matches": entry.matches,
+                        "next_slot": (
+                            (entry.slot_index + 1) % linear_table.capacity
+                            if entry.occupied and not entry.matches
+                            else None
+                        ),
                     }
-                    for step in trace.steps
-                ],
-                "bucket_index": trace.bucket_index,
-                "chain": chain,
-                "chain_length": len(trace.bucket_entries),
-                "collision": len(trace.bucket_entries) > 1,
-                "found": trace.found,
-                "value": trace.value,
-                "comparisons": trace.comparisons,
-            }
+                    for entry in probe_trace.probes
+                ]
+                response_body = {
+                    "key": key,
+                    "collision_resolution": collision_resolution,
+                    "steps": [
+                        {
+                            "character": step.character,
+                            "codepoint": step.codepoint,
+                            "previous_hash": step.previous_hash,
+                            "current_hash": step.current_hash,
+                        }
+                        for step in probe_trace.steps
+                    ],
+                    "initial_bucket": probe_trace.initial_bucket,
+                    "probes": probe_entries,
+                    "final_slot": probe_trace.final_slot,
+                    "found": probe_trace.found,
+                    "value": probe_trace.value,
+                    "slot_probes": probe_trace.slot_probes,
+                }
             self._send_bytes(
                 200,
                 json.dumps(response_body, ensure_ascii=False).encode("utf-8"),
