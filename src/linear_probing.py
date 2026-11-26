@@ -192,6 +192,14 @@ class LinearProbingHashTable:
         """Return the number of stored keys divided by the slot count."""
         return self._size / self._capacity
 
+    def slot_items(self) -> list[tuple[str, object] | None]:
+        """Return a shallow copy of the slot array."""
+        return self._slots.copy()
+
+    def items(self) -> list[tuple[str, object]]:
+        """Return a copy of every stored key/value pair."""
+        return [entry for entry in self._slots if entry is not None]
+
     def __len__(self) -> int:
         return self._size
 

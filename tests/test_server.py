@@ -48,6 +48,29 @@ class ServerTests(unittest.TestCase):
         self.assertIn('value="linear_probing"', page)
         self.assertIn("slot_probes", page)
 
+    def test_table_page_shows_bucket_and_slot_states_and_hash_rule(self):
+        with urlopen(f"{self.base_url}/table") as response:
+            empty_page = response.read().decode("utf-8")
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("Horner", empty_page)
+        self.assertIn("h = (h * 31 + ord(character)) % capacity", empty_page)
+        self.assertIn("Bucket 7", empty_page)
+        self.assertIn("Slot 7", empty_page)
+        self.assertIn("empty", empty_page)
+
+        self._post_json("/shorten", {"url": "https://example.com/a"})
+        self._post_json("/shorten", {"url": "https://example.com/i"})
+        with urlopen(f"{self.base_url}/table") as response:
+            populated_page = response.read().decode("utf-8")
+
+        self.assertIn("https://example.com/a", populated_page)
+        self.assertIn("https://example.com/i", populated_page)
+        self.assertIn("chain", populated_page.lower())
+        self.assertIn("probe", populated_page.lower())
+        self.assertIn("slot 0", populated_page.lower())
+        self.assertIn("slot 1", populated_page.lower())
+
     def test_shorten_returns_code_and_duplicate_status_with_forwarded_origin(self):
         url = "https://example.com/a"
         request_headers = {

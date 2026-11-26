@@ -1,4 +1,4 @@
-"""Measure separate-chaining lookup costs and write CSV and SVG results."""
+"""Measure collision-resolution lookup costs and write CSV and SVG results."""
 
 import csv
 import random
@@ -15,13 +15,17 @@ from src.hash_table import HashTable
 from src.linear_probing import LinearProbingHashTable
 
 
-DEFAULT_CAPACITY = 128
-DEFAULT_LOADS = (0.1, 0.25, 0.5, 0.75, 0.9)
+DEFAULT_CAPACITY = 4093
+DEFAULT_LOADS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+CHAINING_CAPACITY = 4093
+CHAINING_LOADS = tuple(index / 4 for index in range(1, 17))
 KEY_SEED = 2026
 MISSING_KEY_SEED = 2027
 KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 RESULTS_CSV = Path(__file__).with_name("results.csv")
 RESULTS_SVG = Path(__file__).with_name("results.svg")
+CHAINING_RESULTS_CSV = Path(__file__).with_name("chaining_results.csv")
+CHAINING_RESULTS_SVG = Path(__file__).with_name("chaining_results.svg")
 
 CSV_COLUMNS = (
     "collision_resolution",
@@ -160,6 +164,86 @@ def collect_results(
     return results
 
 
+def collect_chaining_results(
+    capacity: int = CHAINING_CAPACITY,
+    target_loads: Sequence[float] = CHAINING_LOADS,
+) -> list[ExperimentResult]:
+    """Run the separate-chaining-only experiment, including loads above one."""
+    if isinstance(capacity, bool) or not isinstance(capacity, int):
+        raise TypeError("capacity must be an integer")
+    if capacity <= 0:
+        raise ValueError("capacity must be positive")
+    if not target_loads:
+        raise ValueError("target_loads must not be empty")
+
+    key_counts = []
+    for target_load in target_loads:
+        if isinstance(target_load, bool) or not isinstance(target_load, (int, float)):
+            raise TypeError("load factors must be numbers")
+        if not 0 < target_load:
+            raise ValueError("load factors must be positive")
+        key_counts.append(max(1, round(target_load * capacity)))
+
+    maximum_key_count = max(key_counts)
+    stored_key_samples = _make_key_samples(
+        "stored-", maximum_key_count, KEY_SEED, capacity
+    )
+    missing_key_samples = _make_key_samples(
+        "missing-", maximum_key_count, MISSING_KEY_SEED, capacity
+    )
+
+    results = []
+    for key_count in key_counts:
+        stored_keys = stored_key_samples[:key_count]
+        missing_keys = missing_key_samples[:key_count]
+        table = HashTable(initial_capacity=capacity, max_load=None)
+        for index, key in enumerate(stored_keys):
+            table.put(key, index)
+
+        successful_total = 0
+        for key in stored_keys:
+            value, comparisons = table.get_with_comparisons(key)
+            if value is None:
+                raise RuntimeError(f"inserted key was not found: {key}")
+            successful_total += comparisons
+
+        unsuccessful_total = 0
+        for key in missing_keys:
+            value, comparisons = table.get_with_comparisons(key)
+            if value is not None:
+                raise RuntimeError(f"missing key unexpectedly found: {key}")
+            unsuccessful_total += comparisons
+
+        actual_load = key_count / capacity
+        results.extend(
+            (
+                ExperimentResult(
+                    collision_resolution="separate_chaining",
+                    capacity=capacity,
+                    key_count=key_count,
+                    load_factor=actual_load,
+                    search_type="successful",
+                    search_count=len(stored_keys),
+                    measurement_unit="key_comparisons",
+                    measured_average=successful_total / len(stored_keys),
+                    theoretical_average=1 + (key_count - 1) / (2 * capacity),
+                ),
+                ExperimentResult(
+                    collision_resolution="separate_chaining",
+                    capacity=capacity,
+                    key_count=key_count,
+                    load_factor=actual_load,
+                    search_type="unsuccessful",
+                    search_count=len(missing_keys),
+                    measurement_unit="key_comparisons",
+                    measured_average=unsuccessful_total / len(missing_keys),
+                    theoretical_average=actual_load,
+                ),
+            )
+        )
+    return results
+
+
 def _make_key_samples(
     prefix: str,
     count: int,
@@ -172,7 +256,7 @@ def _make_key_samples(
     keys = []
     while len(keys) < count:
         suffix = "".join(generator.choices(KEY_ALPHABET, k=12))
-        key = prefix + suffix
+        key = f"https://example.com/{prefix}{suffix}"
         if seen_keys.get(key) is None:
             seen_keys.put(key, True)
             keys.append(key)
@@ -267,9 +351,10 @@ def write_svg(results: Sequence[ExperimentResult], path: str | Path) -> None:
             for result in method_results
         )
         max_value = max(max_value, 1.0) * 1.15
+        max_load_factor = max(result.load_factor for result in method_results)
 
         def x_position(load_factor: float) -> float:
-            return plot_left + load_factor * plot_width
+            return plot_left + load_factor / max_load_factor * plot_width
 
         def y_position(value: float) -> float:
             return plot_bottom - (value / max_value) * plot_height
@@ -281,7 +366,7 @@ def write_svg(results: Sequence[ExperimentResult], path: str | Path) -> None:
         )
 
         for tick in range(tick_count + 1):
-            load_factor = tick / tick_count
+            load_factor = max_load_factor * tick / tick_count
             x = x_position(load_factor)
             elements.extend(
                 (
@@ -289,7 +374,7 @@ def write_svg(results: Sequence[ExperimentResult], path: str | Path) -> None:
                     f'y2="{plot_bottom}" stroke="#e0e0e0"/>',
                     f'<text x="{x:.2f}" y="{plot_bottom + 20}" '
                     'text-anchor="middle" font-family="sans-serif" font-size="11">'
-                    f"{load_factor:.1f}</text>",
+                    f"{load_factor:.2f}</text>",
                 )
             )
 
@@ -380,14 +465,20 @@ def write_svg(results: Sequence[ExperimentResult], path: str | Path) -> None:
 
 
 def main() -> None:
-    """Run the default experiment and write its CSV and SVG outputs."""
+    """Run comparison and chaining-only experiments and write their outputs."""
     results = collect_results()
     write_csv(results, RESULTS_CSV)
     write_svg(results, RESULTS_SVG)
+    chaining_results = collect_chaining_results()
+    write_csv(chaining_results, CHAINING_RESULTS_CSV)
+    write_svg(chaining_results, CHAINING_RESULTS_SVG)
     print(f"Capacity: {DEFAULT_CAPACITY}")
     print(f"Target load factors: {', '.join(f'{load:.2f}' for load in DEFAULT_LOADS)}")
     print(f"Results CSV: {RESULTS_CSV}")
     print(f"Results SVG: {RESULTS_SVG}")
+    print(f"Separate-chaining loads: {CHAINING_LOADS[0]:.2f} to {CHAINING_LOADS[-1]:.2f}")
+    print(f"Separate-chaining CSV: {CHAINING_RESULTS_CSV}")
+    print(f"Separate-chaining SVG: {CHAINING_RESULTS_SVG}")
 
 
 if __name__ == "__main__":

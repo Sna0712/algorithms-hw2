@@ -151,6 +151,14 @@ class HashTable:
             raise IndexError("bucket index out of range")
         return self._buckets[index].copy()
 
+    def items(self) -> list[tuple[str, object]]:
+        """Return a copy of every stored key/value pair."""
+        return [
+            entry
+            for bucket in self._buckets
+            for entry in bucket
+        ]
+
     def __len__(self) -> int:
         return self._size
 

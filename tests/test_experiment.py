@@ -5,8 +5,13 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from experiments.probe_experiment import (
+    CHAINING_CAPACITY,
+    CHAINING_LOADS,
+    CHAINING_RESULTS_CSV,
+    CHAINING_RESULTS_SVG,
     DEFAULT_CAPACITY,
     DEFAULT_LOADS,
+    collect_chaining_results,
     collect_results,
     write_csv,
     write_svg,
@@ -15,10 +20,60 @@ from experiments.probe_experiment import (
 
 class SeparateChainingExperimentTests(unittest.TestCase):
     def test_default_experiment_settings_cover_multiple_load_factors(self):
-        self.assertEqual(DEFAULT_CAPACITY, 128)
-        self.assertGreaterEqual(len(DEFAULT_LOADS), 4)
+        self.assertEqual(DEFAULT_CAPACITY, 4093)
+        self.assertEqual(DEFAULT_LOADS, (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9))
         self.assertEqual(tuple(sorted(DEFAULT_LOADS)), DEFAULT_LOADS)
         self.assertTrue(all(0 < load < 1 for load in DEFAULT_LOADS))
+        self.assertEqual(CHAINING_CAPACITY, 4093)
+        self.assertEqual(CHAINING_LOADS[0], 0.25)
+        self.assertEqual(CHAINING_LOADS[-1], 4.0)
+        self.assertTrue(all(0.25 <= load <= 4 for load in CHAINING_LOADS))
+        self.assertNotEqual(CHAINING_RESULTS_CSV, Path("experiments/results.csv"))
+        self.assertNotEqual(CHAINING_RESULTS_SVG, Path("experiments/results.svg"))
+
+    def test_chaining_only_experiment_supports_loads_above_one(self):
+        results = collect_chaining_results(
+            capacity=8,
+            target_loads=(0.25, 4.0),
+        )
+
+        self.assertEqual(len(results), 4)
+        self.assertTrue(
+            all(result.collision_resolution == "separate_chaining" for result in results)
+        )
+        self.assertEqual(
+            {(result.key_count, result.load_factor) for result in results},
+            {(2, 0.25), (32, 4.0)},
+        )
+        self.assertTrue(
+            all(result.measurement_unit == "key_comparisons" for result in results)
+        )
+        for result in results:
+            if result.search_type == "successful":
+                expected = 1 + (result.key_count - 1) / (2 * result.capacity)
+            else:
+                expected = result.load_factor
+            self.assertAlmostEqual(result.theoretical_average, expected)
+
+    def test_chaining_only_experiment_outputs_separate_csv_and_svg(self):
+        results = collect_chaining_results(capacity=8, target_loads=(0.5, 4.0))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            csv_path = Path(temporary_directory) / "chaining.csv"
+            svg_path = Path(temporary_directory) / "chaining.svg"
+
+            write_csv(results, csv_path)
+            write_svg(results, svg_path)
+
+            with csv_path.open(newline="", encoding="utf-8") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+            svg_text = svg_path.read_text(encoding="utf-8")
+
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(
+            all(row["collision_resolution"] == "separate_chaining" for row in rows)
+        )
+        self.assertIn("Average key comparisons", svg_text)
+        self.assertIn(">4.00</text>", svg_text)
 
     def test_collect_results_reports_success_and_failure_measurements(self):
         results = collect_results(capacity=20, target_loads=(0.2, 0.5))
@@ -109,6 +164,21 @@ class SeparateChainingExperimentTests(unittest.TestCase):
         second_run = collect_results(capacity=32, target_loads=(0.25, 0.75))
 
         self.assertEqual(first_run, second_run)
+
+    def test_generated_samples_are_reproducible_url_strings(self):
+        from experiments.probe_experiment import (
+            KEY_SEED,
+            MISSING_KEY_SEED,
+            _make_key_samples,
+        )
+
+        stored_first = _make_key_samples("stored-", 10, KEY_SEED, 64)
+        stored_again = _make_key_samples("stored-", 10, KEY_SEED, 64)
+        missing = _make_key_samples("missing-", 10, MISSING_KEY_SEED, 64)
+
+        self.assertEqual(stored_first, stored_again)
+        self.assertTrue(all(url.startswith("https://") for url in stored_first + missing))
+        self.assertTrue(all(url not in stored_first for url in missing))
 
     def test_default_unsuccessful_searches_do_not_use_a_correlated_key_pattern(self):
         high_load_failure = next(

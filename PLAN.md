@@ -71,11 +71,11 @@
 ### URL 단축 및 복원 — `src/shortener.py`
 
 - `validate_url(url: str) -> str`: `urllib.parse.urlsplit`로 입력을 검사한다. 비어 있지 않은 문자열이며 절대 URL이고 scheme이 `http` 또는 `https`이며 hostname을 가져야 한다. 정규화·공백 제거를 하지 않고 잘못된 입력은 `ValueError`로 처리한다.
-- `URLShortener`: URL→코드와 코드→URL 인덱스로 두 개의 `HashTable` 인스턴스를 사용하고, 새 ID를 1부터 발급한다.
+- `URLShortener(collision_resolution: str = "separate_chaining")`: URL→코드와 코드→URL 인덱스로 두 개의 같은 종류의 직접 구현 테이블을 사용한다. `separate_chaining`은 `HashTable`, `linear_probing`은 `LinearProbingHashTable`을 선택하며, 두 방식에서 단축·중복 방지·복원이 동일하게 동작한다.
 - `shorten(url: str) -> str`: URL을 검증하고 이미 저장된 URL이면 기존 코드를 돌려준다. 새 URL이면 다음 ID를 `encode_base62`로 인코딩하고 양방향 인덱스에 저장한다.
 - `shorten_with_status(url: str) -> tuple[str, bool]`: HTTP 응답에 필요한 생성 여부까지 반환한다. 두 번째 값은 새 URL이면 `True`, 기존 URL이면 `False`다. `shorten`과 같은 검증과 저장 경로를 공유한다.
 - `expand(code: str) -> str`: 저장된 원래 URL을 반환하고, 미등록 코드는 `KeyError`로 처리한다.
-- `inspect_url_lookup(url: str) -> LookupTrace`: URL 인덱스에 대한 조회 과정을 반환해 서버의 해시 시각화 경로에서 사용한다.
+- `inspect_url_lookup(url: str) -> LookupTrace | ProbeTrace`: 선택한 URL 인덱스의 조회 과정을 반환해 서버의 해시 시각화 경로에서 사용한다.
 
 ### HTTP 서버와 브라우저 — `src/server.py`, `src/templates/index.html`
 
@@ -83,18 +83,20 @@
 - `BaseHTTPRequestHandler` 하위 클래스의 `do_GET()`은 `/`에 브라우저 페이지를 제공하고 `/<code>`를 302 리다이렉트한다. 알 수 없는 코드는 404다.
 - `do_POST()`의 `/shorten`은 JSON의 문자열 `url` 필드를 검증하고 단축한다. 새 URL은 201, 중복 URL은 200이며 응답 JSON에 `code`와 `short_url`을 포함한다. 잘못된 JSON·필드·URL은 400이다.
 - `/visualize`는 JSON 문자열 `key`를 받아 URL 인덱스의 `LookupTrace`를 JSON으로 반환한다. 응답은 문자별 해시 단계, 버킷 인덱스, 버킷 체인, 키 비교 결과와 횟수를 포함한다.
+- `GET /table`은 모든 separate chaining 버킷과 linear probing 슬롯의 점유 상태를 보여준다. Horner 해시식을 설명하고 체인 및 linear probing의 홈 슬롯에서 최종 위치까지 탐색 경로를 표시한다.
 - `index.html`은 URL 제출 폼과 해시 시각화 입력 폼을 제공한다. 표준 브라우저 JavaScript의 `fetch`로 기존 `/shorten` API와 `/visualize`를 호출하고 같은 페이지에 결과를 표시한다. 동적 텍스트는 HTML로 실행하지 않고 텍스트로 삽입한다.
 - `tests/test_server.py`는 임시 포트의 로컬 서버에 표준 라이브러리 `urllib.request`로 요청을 보내 API 상태·헤더·JSON과 HTML 페이지를 확인한다. 브라우저 직접 확인도 완료 조건에 포함한다.
 
 ### 적재율 실험 및 출력 — `experiments/probe_experiment.py`
 
 - Makefile이 이미 이 파일을 실행하므로 `make experiment`의 진입점과 명령은 유지한다.
-- 재현 가능한 키 목록을 만들고, 적재율별 항목 수를 `n = round(alpha * capacity)`로 정한다. 각 실행은 고정 용량 및 `max_load=None`으로 테이블을 구성해 확장을 막고, 실제 적재율 `n / capacity`를 기록한다. 성공 조회는 저장한 키, 실패 조회는 저장되지 않은 고정 키를 사용한다.
+- 두 방식 비교는 용량 4093, 목표 적재율 0.1–0.9(0.1 간격), 적재율별 항목 수 `n = round(alpha * capacity)`로 수행한다. 재현 가능한 임의 URL을 생성하고 같은 저장 키·실패 조회 키를 양쪽 방식에 적용한다. 각 실행은 고정 용량 및 `max_load=None`으로 자동 확장을 끄고 실제 적재율 `n / capacity`를 기록한다.
+- Separate chaining 단독 실험은 별도 함수와 산출물(`experiments/chaining_results.csv`, `experiments/chaining_results.svg`)을 사용한다. 용량 4093, 적재율 0.25–4.0(0.25 간격)을 적용하고, 1을 넘는 적재율에서도 `max_load=None`으로 고정 용량을 유지한다.
 - separate chaining은 `get_with_comparisons`로 키 비교 횟수를 측정한다. 각 적재율에 대해 성공/실패 조회를 각각 수행하고 평균 비교 횟수를 계산한다.
 - 이론값은 SPEC.md의 식 그대로 사용한다. `alpha = n / m`에 대해 separate chaining 실패는 `alpha`, 성공은 `1 + (n - 1) / (2m)`이다. Linear probing 실패는 `1/2 × (1 + 1/(1-alpha)^2)`, 성공은 `1/2 × (1 + 1/(1-alpha))`의 근사값으로 기록한다. 식의 가정과 실측치 차이는 결과 해석에서 분명히 한다.
 - `LinearProbingHashTable`에도 같은 키와 조회 집합을 사용한다. Linear probing의 관측 단위는 키 등가 비교가 아니라 확인한 슬롯 수이며, 실패 탐색을 끝내는 빈 슬롯도 포함한다. CSV의 `measurement_unit` 필드로 chaining의 `key_comparisons`와 probing의 `slot_probes`를 구분한다.
-- CSV는 표준 `csv` 모듈로 `experiments/results.csv`에 쓴다. 열에는 방식, 용량, 키 수, 적재율, 탐색 종류, 탐색 수, 관측 단위, 실제 평균 횟수, 이론 평균 횟수를 포함한다.
-- SVG는 표준 라이브러리만으로 `experiments/results.svg`에 생성한다. 적재율을 x축, 평균 횟수를 y축으로 하고 방식·성공/실패·실측/이론선을 구별해 표시한다. XML 문자를 이스케이프하고, CSV와 SVG의 데이터가 동일한 실험 결과에서 나오도록 한다.
+- 비교 CSV/SVG는 기존 `experiments/results.csv` 및 `experiments/results.svg`를 갱신한다. 별도 chaining CSV/SVG도 같은 결과 행 형식과 작성 함수를 사용한다. CSV에는 방식, 용량, 키 수, 적재율, 탐색 종류, 탐색 수, 관측 단위, 실제 평균 횟수, 이론 평균 횟수를 포함한다.
+- 비교 SVG는 방식별 측정 단위를 구분해 각 방식의 성공/실패 실측·이론선을 보여준다. XML 문자를 이스케이프하고 CSV와 SVG가 같은 실험 결과에서 생성되게 한다.
 - 실험 계산과 파일 쓰기는 테스트 가능한 함수로 분리한다. 예: `collect_results(capacity, target_loads)`, `write_csv(results, path)`, `write_svg(results, path)`, `main()`. 결과 행은 `ExperimentResult` 데이터 클래스로 표현한다.
 
 ### Linear probing — `src/linear_probing.py`
@@ -110,12 +112,12 @@
 | --- | --- | --- | --- | --- |
 | 1. 기존 Base62 테스트 확인 | 없음 | 기존 `tests/test_base62.py`를 변경 없이 읽고 기준선 테스트로 사용한다. | `src/base62.py`의 API·오류 동작과 SPEC.md가 일치하는지 확인한다. 이 단계에서는 Base62 구현을 다시 작성하지 않는다. | `python3 -m unittest discover -s tests -p 'test_base62.py' -v` 실행. |
 | 2. Horner 해시 및 separate chaining 테스트와 구현 | 1 | `tests/test_hash_table.py`에 Horner 단계·버킷 인덱스, 빈 테이블, 충돌 키, 갱신, 확장·재해싱, `max_load=None`, 성공/실패 비교 횟수 테스트를 먼저 추가한다. | `src/hash_table.py`의 `HashTable`, `HashStep`, `LookupTrace`를 구현한다. 핵심 자료구조는 리스트 기반이며 `dict`, `set`, `hash()` 없이 동작해야 한다. | 테스트를 먼저 실행해 실패를 확인하고, 구현 후 `python3 -m unittest discover -s tests -p 'test_hash_table.py' -v` 및 `make test` 통과. |
-| 3. URL 단축기 테스트와 구현 | 2 | `tests/test_shortener.py`에서 HTTP/HTTPS 유효성, ID 및 코드 발급, 중복 URL, 복원, 미등록 코드, 잘못된 URL·타입 테스트를 먼저 작성한다. | `src/shortener.py`의 `validate_url`, `URLShortener`, `shorten`, `shorten_with_status`, `expand`를 구현한다. 저장과 조회는 단계 2의 해시 테이블 및 Base62를 사용한다. | 실패 테스트를 확인한 뒤 `python3 -m unittest discover -s tests -p 'test_shortener.py' -v`; 이어 `make test`. |
+| 3. URL 단축기 테스트와 구현 | 2 | `tests/test_shortener.py`에서 HTTP/HTTPS 유효성, ID 및 코드 발급, 중복 URL, 복원, 미등록 코드, 잘못된 URL·타입과 두 충돌 처리 방식 모두에서의 단축/복원을 먼저 검증한다. | `src/shortener.py`의 `URLShortener(collision_resolution=...)`가 `HashTable` 또는 `LinearProbingHashTable` 두 인덱스를 선택하도록 구현한다. | 실패 테스트를 확인한 뒤 `python3 -m unittest discover -s tests -p 'test_shortener.py' -v`; 이어 `make test`. |
 | 4. `.github/copilot-instructions.md` 규칙 파일 작성 | 3 | 별도 기능 테스트는 없다. 규칙 파일에 적을 범위를 기존 SPEC, PLAN, 테스트 실행 방식과 대조한다. | `.github/copilot-instructions.md`를 작성해 명세 우선, 표준 라이브러리만 사용, 직접 구현 자료구조 제약, TDD 순서, 검증 명령 및 범위 외 파일 변경 방지 규칙을 기록한다. SPEC.md의 요구사항을 재정의하지 않는다. | 파일이 저장소 규칙으로 적용될 경로에 있는지와 지시가 SPEC/PLAN과 모순되지 않는지 확인하고 `git diff --check` 실행. |
-| 5. Separate chaining 적재율 실험 및 CSV/SVG 생성 | 2, 4 | `tests/test_experiment.py`에서 재현 가능한 키, 적재율별 항목 수와 실제 적재율, 성공/실패 비교 횟수, chaining 이론값, CSV 행·헤더, SVG 구조를 먼저 테스트한다. | `experiments/probe_experiment.py`의 첫 구현은 separate chaining만 대상으로 한다. 용량 고정 및 `max_load=None`을 사용하고, SPEC.md의 chaining 이론식과 대조해 `experiments/results.csv` 및 `experiments/results.svg`를 생성한다. | 테스트를 먼저 실패 확인 후 구현하고, 실험 테스트 및 `make experiment`를 실행한다. CSV의 성공/실패 행과 이론값, SVG의 축·범례·계열을 확인한다. |
-| 6. 웹 서버 및 충돌 시각화 구현 | 3, 5 | `tests/test_server.py`에 루트 페이지, URL 폼 결과, 201/200, 400, 302/Location, 404, 시각화 데이터의 해시 단계·버킷·체인·비교 횟수 테스트를 먼저 작성한다. | `src/server.py`와 `src/templates/index.html`을 구현한다. 기존 JSON API를 유지하며 브라우저에서 단축 결과를 확인하고, 입력한 키의 Horner 계산 과정과 separate chaining 충돌 처리를 시각적으로 볼 수 있어야 한다. | 로컬 임시 포트 기반 서버 테스트를 실행하고, `make serve`로 브라우저에서 단축 폼 및 시각화를 직접 확인한다. |
+| 5. Separate chaining 적재율 실험 및 CSV/SVG 생성 | 2, 4 | `tests/test_experiment.py`에서 용량, 0.25–4 적재율, 재현 가능한 URL, 고정 용량, 성공/실패 비교 횟수, 이론값, 별도 CSV/SVG를 먼저 검증한다. | `experiments/probe_experiment.py`에 separate chaining 단독 실험을 구현한다. 용량 4093 및 `max_load=None`을 사용해 `experiments/chaining_results.csv`와 `experiments/chaining_results.svg`를 생성한다. | 실패 테스트를 먼저 확인한 뒤 실험 테스트와 `make experiment`를 실행한다. |
+| 6. 웹 서버 및 충돌 시각화 구현 | 3, 5 | `tests/test_server.py`에 기존 HTTP 기능과 `/table`의 각 버킷·슬롯 상태, Horner 공식, 체인 및 선형 탐색 경로를 먼저 검증한다. | `src/server.py`와 템플릿을 확장해 `/table`을 제공한다. 기존 URL 단축·복원 및 두 방식 시각화를 유지한다. | 임시 포트 서버 테스트와 `make serve` 브라우저 확인을 실행한다. |
 | 7. Linear probing 테스트 및 구현 | 2, 4 | `tests/test_linear_probing.py`에 충돌 후 삽입·검색, 갱신, 재해싱, `max_load=None`, 성공/실패 탐색 및 빈 슬롯을 포함한 슬롯 확인 횟수, 가득 찬 테이블 처리를 먼저 테스트한다. | `src/linear_probing.py`의 `LinearProbingHashTable`, `get_with_probes`를 구현한다. 같은 Horner 해시를 사용하며 슬롯 배열과 다음 인덱스 탐색으로 충돌을 처리한다. | 테스트 우선으로 실패를 확인한 뒤 `python3 -m unittest discover -s tests -p 'test_linear_probing.py' -v`; 이어 `make test`. |
-| 8. 두 충돌 처리 방식의 성능 비교 및 linear probing 시각화 | 5, 7 | 실험 테스트를 확장해 같은 키셋·용량·적재율·조회 집합을 두 방식에 적용하는지, 비교 단위·이론값·CSV/SVG 계열이 구분되는지 검증한다. | `experiments/probe_experiment.py`를 확장해 chaining의 키 비교 횟수와 probing의 슬롯 확인 횟수를 나란히 측정한다. SPEC.md의 linear probing 근사 이론식을 포함하고, SVG에서 두 충돌 처리 방식의 성공/실패 실측·이론선을 구별해 시각화한다. | 실험 테스트와 `make experiment`를 실행한다. CSV의 `measurement_unit` 구분, 두 방식의 같은 입력 조건, SVG 레이블·계열 및 α 범위를 확인한다. |
+| 8. 두 충돌 처리 방식의 성능 비교 및 linear probing 시각화 | 5, 7 | 실험 테스트를 확장해 용량 4093, 적재율 0.1–0.9, 동일 URL 키·조회 집합, 비교 단위·이론값·CSV/SVG 결과를 검증한다. | 비교 실행을 `experiments/results.csv`와 `experiments/results.svg`에 기록한다. chaining 키 비교와 probing 슬롯 확인 단위를 분리해 표시한다. | 실험 테스트와 `make experiment`를 실행하고 결과 파일의 행·단위·축·범례를 확인한다. |
 | 9. 전체 통합 검증 및 보고서 작성 | 1–8 | 전체 `tests/test_*.py`를 실행한다. 발견된 실패는 해당 단계의 테스트와 구현으로 돌아가 수정한다. | 모든 기능이 기존 Makefile 명령 및 SPEC.md와 일치하는지 확인한다. `REPORT.md`에 구현 범위, 설계 요약, 테스트 명령과 결과, 실험 설정·CSV/SVG 경로, 실험값과 이론값의 비교 및 측정 단위 차이를 기록한다. | `make test`, `make experiment`, `make serve`, 브라우저 수동 확인 및 `git diff --check`를 완료한다. 생성된 CSV/SVG와 보고서 수치를 서로 대조한다. |
 
 `make test`는 기존 `unittest discover -s tests -v` 타깃으로 신규 테스트 파일을 자동 검색한다. 각 구현 단계에서는 테스트 작성 → 실패 확인 → 최소 구현 → 해당 테스트 통과 → 전체 테스트 순으로 진행한다. 단계 5는 separate chaining 단독 실험을 먼저 완성하고, 단계 8에서 linear probing 비교와 시각화를 추가한다. 서버 테스트는 외부 네트워크나 제3자 서비스에 의존하지 않는다.
